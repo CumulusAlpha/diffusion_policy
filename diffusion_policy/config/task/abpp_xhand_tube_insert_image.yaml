@@ -1,0 +1,41 @@
+name: abpp_xhand_tube_insert_image
+
+shape_meta: &shape_meta
+  # Source zarr rgb is [T, 3, 480, 640, 3].
+  # AbppDataset splits it into camera_0/1/2 and resizes each image to 120x160.
+  obs:
+    camera_0:
+      shape: [3, 120, 160]
+      type: rgb
+    camera_1:
+      shape: [3, 120, 160]
+      type: rgb
+    camera_2:
+      shape: [3, 120, 160]
+      type: rgb
+    robot_qpos:
+      shape: [6]
+      type: low_dim
+    xhand_qpos:
+      shape: [12]
+      type: low_dim
+  action:
+    # 7D arm target xyz + quat, followed by 12D XHand qpos.
+    # AbppDataset normalizes action as eef_pos[0:3] range,
+    # eef_quat[3:7] identity, and xhand_action_qpos[7:19] range.
+    shape: [19]
+
+raw_dataset_path: /home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert.zarr
+dataset_path: &dataset_path /home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert-120x160.zarr
+
+dataset:
+  _target_: diffusion_policy.dataset.abpp_dataset.AbppDataset
+  zarr_path: *dataset_path
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  # Run tmp/999_preprocess_abpp_resize.py first; training should not resize online.
+  resize_hw: null
+  seed: 42
+  val_ratio: 0.02
