@@ -8,24 +8,29 @@ import zarr
 from tqdm import tqdm
 
 
-def get_array_compression_kwargs(src):
-    if hasattr(src, "compressors"):
-        compressors = src.compressors
-        if compressors:
-            return {"compressors": compressors}
-        return {}
-    return {"compressor": src.compressor}
+def get_time_chunks(src, chunk_length):
+    if len(src.shape) == 0:
+        return src.shape
+    return (min(chunk_length, src.shape[0]),) + tuple(src.shape[1:])
 
 
-def copy_array(src_group, dst_group, key):
+def copy_array(src_group, dst_group, key, chunk_length, batch_size):
     src = src_group[key]
-    dst_group.create_array(
+    dst = dst_group.create_dataset(
         name=key,
-        data=src[:],
-        chunks=src.chunks,
-        **get_array_compression_kwargs(src),
+        shape=src.shape,
+        chunks=get_time_chunks(src, chunk_length),
+        dtype=src.dtype,
+        compressor=None,
         overwrite=True,
     )
+    if len(src.shape) == 0:
+        dst[...] = src[...]
+        return
+
+    for start in tqdm(range(0, src.shape[0], batch_size), desc=f"copy {key}"):
+        end = min(start + batch_size, src.shape[0])
+        dst[start:end] = src[start:end]
 
 
 def resize_rgb(src_rgb, dst_rgb, height, width, batch_size):
@@ -53,15 +58,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--src",
-        default="/home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert.zarr",
+        default="/home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert-v2.zarr",
     )
     parser.add_argument(
         "--dst",
-        default="/home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert-120x160.zarr",
+        default="/home/ubuntu/AutoBioPlus/logs/task/ABPP-XHand-Tube-Insert-120x160-v2.zarr",
     )
     parser.add_argument("--height", type=int, default=120)
     parser.add_argument("--width", type=int, default=160)
     parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--chunk-length", type=int, default=8)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -74,25 +80,31 @@ def main():
         shutil.rmtree(dst_path)
 
     src_root = zarr.open(str(src_path), mode="r")
-    dst_root = zarr.open(str(dst_path), mode="w")
+    dst_root = zarr.open(str(dst_path), mode="w", zarr_version=2)
     src_data = src_root["data"]
     src_meta = src_root["meta"]
     dst_data = dst_root.create_group("data")
     dst_meta = dst_root.create_group("meta")
 
     for key in ["action", "state", "timestamp"]:
-        copy_array(src_data, dst_data, key)
+        copy_array(src_data, dst_data, key, args.chunk_length, args.batch_size)
 
     for key in src_meta.keys():
-        copy_array(src_meta, dst_meta, key)
+        copy_array(src_meta, dst_meta, key, args.chunk_length, args.batch_size)
 
     src_rgb = src_data["rgb"]
-    dst_data.create_array(
+    dst_data.create_dataset(
         name="rgb",
         shape=(src_rgb.shape[0], src_rgb.shape[1], args.height, args.width, 3),
-        chunks=(src_rgb.chunks[0], src_rgb.shape[1], args.height, args.width, 3),
+        chunks=(
+            min(args.chunk_length, src_rgb.shape[0]),
+            src_rgb.shape[1],
+            args.height,
+            args.width,
+            3,
+        ),
         dtype=src_rgb.dtype,
-        **get_array_compression_kwargs(src_rgb),
+        compressor=None,
         overwrite=True,
     )
     resize_rgb(
